@@ -101,3 +101,23 @@ fn u32_to_rptype(rp_type_id : u32) -> Result<RPMessageType, MessageErr> {
       })
   }
 }
+
+impl TryFrom<u8> for RPMessageType {
+    type Error = ();
+    fn try_from(n: u8) -> Result<Self, Self::Error> {
+        match n {
+            0 => Ok(Self::Text),
+            1 => Ok(Self::Fneed),
+            2 => Ok(Self::Freq),
+            3 => Ok(Self::Pdirectory),
+            4 => Ok(Self::Cdirectory),
+            5 => Ok(Self::Pnamereq),
+            6 => Ok(Self::Cinforeq),
+            7 => Ok(Self::Pinput),
+            8 => Ok(Self::Join),
+            9 => Ok(Self::Leave),
+            10 => Ok(Self::Info),
+            _ => Err(()),
+        }
+    }
+}

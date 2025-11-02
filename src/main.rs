@@ -1,6 +1,7 @@
 use crate::rusty_protocol::{bytes_to_message, message_to_bytes};
 
 mod rusty_protocol;
+mod simple_pirate;
 
 
 fn main() {
