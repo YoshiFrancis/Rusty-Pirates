@@ -1,6 +1,5 @@
-[package]
-name = "rusty-pirates"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = ["rusty-game-cabin","rusty-pirate","rusty-protocol", "rusty-ship"]
 
 [dependencies]

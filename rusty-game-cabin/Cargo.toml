@@ -1,5 +1,5 @@
 [package]
-name = "rusty-cabin-simple-lobby"
+name = "rusty-game-cabin"
 version = "0.1.0"
 edition = "2024"
 
