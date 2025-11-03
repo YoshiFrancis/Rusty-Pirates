@@ -1,5 +1,3 @@
 [workspace]
 resolver = "3"
 members = ["rusty-game-cabin","rusty-pirate","rusty-protocol", "rusty-ship"]
-
-[dependencies]
