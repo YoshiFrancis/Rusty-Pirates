@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RPMessageType {
   Text = 0,
   Fneed = 1,
@@ -18,7 +18,7 @@ pub enum RPMessageType {
   Name = 11,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Message {
   rp_type: RPMessageType,
   args: Vec<String>
@@ -33,7 +33,7 @@ pub fn create_message(rp_type : RPMessageType, args : Vec<String>) -> Message {
   Message { rp_type, args }
 }
 
-pub fn message_to_bytes(message : Message) -> Vec<u8> {
+pub fn encode_message(message : Message) -> Vec<u8> {
   let fs : u8 = 34;
   let mut bytes : Vec<u8> = vec![];
   let rp_type = message.rp_type as u32;
@@ -49,7 +49,7 @@ pub fn message_to_bytes(message : Message) -> Vec<u8> {
   bytes
 }
 
-pub fn bytes_to_message(bytes : &[u8]) -> Result<Message, MessageErr> {
+pub fn decode_bytes(bytes : &[u8]) -> Result<Message, MessageErr> {
   let fs : u8 = 34;
 
   if bytes.len() < 6 {
@@ -130,7 +130,7 @@ mod tests {
       message_bytes.push(FS);
       message_bytes.push(FS);
 
-      let actual_message = bytes_to_message(&message_bytes).expect("Failed to parse ok message");
+      let actual_message = decode_bytes(&message_bytes).expect("Failed to parse ok message");
       assert_eq!(actual_message.rp_type, expected_message.rp_type);
       assert_eq!(actual_message.args, expected_message.args);
 
@@ -148,7 +148,7 @@ mod tests {
       message_bytes.extend_from_slice(&String::from("testing2").as_bytes());
       message_bytes.push(FS);
 
-      match bytes_to_message(&message_bytes) {
+      match decode_bytes(&message_bytes) {
         Err(_) => panic!("Correct panic"),
         Ok(_) => println!("Passed with no double fs at end: {:#?}", message_bytes)
       }
@@ -167,22 +167,40 @@ mod tests {
       message_bytes.push(FS);
       message_bytes.push(FS);
 
-      bytes_to_message(&message_bytes).unwrap();
+      decode_bytes(&message_bytes).unwrap();
     }
 
     #[test]
-    fn decode_message_ok() {
+    fn encode_message_ok() {
+      let freq_type : u32 = RPMessageType::Freq as u32;
+      let mut expected_bytes : Vec<u8> = vec![];
+      expected_bytes.extend_from_slice(&freq_type.to_le_bytes());
+      expected_bytes.push(FS);
+      expected_bytes.extend_from_slice(&String::from("testing1").as_bytes());
+      expected_bytes.push(FS);
+      expected_bytes.extend_from_slice(&String::from("testing2").as_bytes());
+      expected_bytes.push(FS);
+      expected_bytes.push(FS);
+
+      let given_message = Message {
+        rp_type : RPMessageType::Freq, args : vec![String::from("testing1"), String::from("testing2")]
+      };
+
+      let actual_bytes = encode_message(given_message);
+      assert_eq!(actual_bytes, expected_bytes);
       
-    }
-
-    #[test]
-    fn decode_message_fail() {
-
     }
 
     #[test] 
     fn message_in_and_out() {
+      let given_message = Message {
+        rp_type : RPMessageType::Text, args : vec![String::from("testing1"), String::from("testing2")]
+      };
 
+      let encoded_message_bytes = encode_message(given_message.clone());
+      let decoded_message = decode_bytes(&encoded_message_bytes).unwrap();
+
+      assert_eq!(decoded_message, given_message);
     }
 
 }
