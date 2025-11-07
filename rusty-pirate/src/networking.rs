@@ -103,6 +103,7 @@ async fn send_tcp(wr: &mut OwnedWriteHalf, mut rx: Receiver<Message>) -> Option<
     let n = wr.write(&encode_message(msg)).await.expect("Failed to send to ship via tcp");
     println!("sent {n} bytes on tcp");
     wr.flush().await.expect("could not flush tcp");
+    println!("done flushing");
   }
   println!("done send_tcp");
   None
@@ -275,7 +276,7 @@ mod tests {
   #[tokio::test]
   async fn tcp_basic_send() {
     let listener = create_tcp_server().await.unwrap();
-    let (tx, mut rx) = mpsc::channel(32);
+    let (tx, rx) = mpsc::channel(32);
 
     let (_client_rd, mut client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
     let (mut socket, _) = listener.accept().await.unwrap();
@@ -292,22 +293,81 @@ mod tests {
     assert_eq!(decode_bytes(&bytes_buffer).unwrap(), dummy_msg_1());
   }
 
-  #[test] 
-  fn tcp_continuous_multiple_send() {
+  #[tokio::test] 
+  async fn tcp_continuous_multiple_send() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, rx) = mpsc::channel(32);
 
+    let (_client_rd, mut client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    let (mut socket, _) = listener.accept().await.unwrap();
+
+    tokio::spawn( async move { 
+      send_tcp(&mut client_wr, rx).await.unwrap();
+    });
+
+    let mut bytes_buffer: BytesMut = BytesMut::with_capacity(4096);
+    for i in 0..5 {
+      if i % 2 == 0 {
+        let _ = tx.send(dummy_msg_1()).await;
+        let n = socket.read_buf(&mut bytes_buffer).await.unwrap();
+        assert_eq!(n, 18);
+        assert_eq!(decode_bytes(&bytes_buffer).unwrap(), dummy_msg_1());
+      } else {
+        let _ = tx.send(dummy_msg_2()).await;
+        let n = socket.read_buf(&mut bytes_buffer).await.unwrap();
+        assert_eq!(n, 22);
+        assert_eq!(decode_bytes(&bytes_buffer).unwrap(), dummy_msg_2());
+      }
+      bytes_buffer.clear();
+    }
   }
 
-  #[test]
-  fn tcp_lagged_multiple_send() {
+  #[tokio::test]
+  async fn tcp_lagged_multiple_send() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, rx) = mpsc::channel(32);
 
+    let (_client_rd, mut client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    let (mut socket, _) = listener.accept().await.unwrap();
+
+    tokio::spawn( async move { 
+      send_tcp(&mut client_wr, rx).await.unwrap();
+    });
+
+    let mut bytes_buffer: BytesMut = BytesMut::with_capacity(4096);
+    for i in 0..5 {
+      if i % 2 == 0 {
+        let _ = tx.send(dummy_msg_1()).await;
+        let n = socket.read_buf(&mut bytes_buffer).await.unwrap();
+        assert_eq!(n, 18);
+        assert_eq!(decode_bytes(&bytes_buffer).unwrap(), dummy_msg_1());
+      } else {
+        let _ = tx.send(dummy_msg_2()).await;
+        let n = socket.read_buf(&mut bytes_buffer).await.unwrap();
+        assert_eq!(n, 22);
+        assert_eq!(decode_bytes(&bytes_buffer).unwrap(), dummy_msg_2());
+      }
+      bytes_buffer.clear();
+      let _ = sleep(Duration::from_millis(50)).await;
+    }
   }
 
-  #[test]
+  #[tokio::test]
   #[should_panic]
-  fn tcp_send_fail_on_error() {
+  async fn tcp_send_fail_on_error() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, rx) = mpsc::channel(32);
 
+    let (_client_rd, mut client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    let (socket, _) = listener.accept().await.unwrap();
+
+    drop(socket);
+    tx.send(dummy_msg_1()).await.unwrap();
+    tx.send(dummy_msg_1()).await.unwrap(); // does not immediately see the dropped socket, so send again
+                                           // analogous to my future pinging to know liveness
+    let _ = send_tcp(&mut client_wr, rx).await.unwrap();
   }
-
+  
 
   // udp tests
   #[test]
