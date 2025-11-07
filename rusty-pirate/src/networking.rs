@@ -132,7 +132,7 @@ async fn send_udp(udp: Arc<UdpSocket>, mut rx: Receiver<Message>) -> Result<(), 
 mod tests {
   use super::*;
   use rusty_protocol::rusty_protocol::{create_message, RPMessageType};
-use tokio::net::TcpListener;
+  use tokio::{net::TcpListener, time::{sleep, Duration}};
   fn dummy_msg_1() ->Message { 
     create_message(RPMessageType::Cdirectory, vec!["test1".to_string(), "test2".to_string()]) 
   }
@@ -146,10 +146,12 @@ use tokio::net::TcpListener;
   }
 
   async fn create_tcp_client() -> Result<(OwnedReadHalf, OwnedWriteHalf), Error> {
-    println!("creating tcp client");
     let tcp = TcpStream::connect("127.0.0.1:6379").await?;
-    println!("connected to tcp connection");
     Ok(tcp.into_split())
+  }
+
+  async fn get_next_message(rx: &mut Receiver<Message>) -> Option<Message> {
+    rx.recv().await
   }
 
   // tcp tests
@@ -159,42 +161,111 @@ use tokio::net::TcpListener;
     let (tx, mut rx) = mpsc::channel(32);
 
     let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
-    let listen_handle = tokio::spawn( async move { 
+    tokio::spawn( async move { 
       listen_tcp(&mut client_rd, tx).await;
     });
 
     let (mut socket, _) = listener.accept().await.unwrap();
-    println!("accepted client");
     socket.write(&encode_message(dummy_msg_1())).await.unwrap();
-    println!("sent message");
 
-    if let Some(msg) = rx.recv().await {
-      assert_eq!(msg, dummy_msg_1());
-      println!("good message!")
-    } else {
-      panic!("failed to receive message!")
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+  }
+
+  #[tokio::test]
+  async fn tcp_continuous_multiple_recv() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, mut rx) = mpsc::channel(32);
+
+    let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    tokio::spawn( async move { 
+      listen_tcp(&mut client_rd, tx).await;
+    });
+
+    let (mut socket, _) = listener.accept().await.unwrap();
+    socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+    socket.write(&encode_message(dummy_msg_2())).await.unwrap();
+    socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+    socket.write(&encode_message(dummy_msg_2())).await.unwrap();
+    socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+  }
+
+  #[tokio::test]
+  async fn tcp_lagged_multiple_recv() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, mut rx) = mpsc::channel(32);
+
+    let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    tokio::spawn( async move { 
+      listen_tcp(&mut client_rd, tx).await;
+    });
+
+    let (mut socket, _) = listener.accept().await.unwrap();
+    tokio::spawn(async move {
+      socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+      sleep(Duration::from_millis(100)).await;
+      socket.write(&encode_message(dummy_msg_2())).await.unwrap();
+      sleep(Duration::from_millis(100)).await;
+      socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+      sleep(Duration::from_millis(100)).await;
+      socket.write(&encode_message(dummy_msg_2())).await.unwrap();
+      sleep(Duration::from_millis(100)).await;
+      socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+    });
+
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+  }
+
+  #[tokio::test]
+  async fn tcp_buffers_at_max_recv() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, mut rx) = mpsc::channel(32);
+
+    let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    tokio::spawn( async move { 
+      listen_tcp(&mut client_rd, tx).await;
+    });
+
+    let (mut socket, _) = listener.accept().await.unwrap();
+    for i in 0..33 {
+      if i % 2 == 0 {
+        socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+      } else {
+        socket.write(&encode_message(dummy_msg_2())).await.unwrap();
+      }
     }
+
+    sleep(Duration::from_secs(1)).await; // allow for the rx buffer to fill
+    assert_eq!(rx.capacity(), 32);
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    // ensure that the tcp still has messagers to buffer in!
+    assert_eq!(rx.capacity(), 32);
   }
 
-  #[test]
-  fn tcp_continuous_multiple_recv() {
-
-  }
-
-  #[test]
-  fn tcp_lagged_multiple_recv() {
-
-  }
-
-  #[test]
-  fn tcp_buffers_at_max_recv() {
-
-  }
-
-  #[test]
+  #[tokio::test]
   #[should_panic]
-  fn tcp_recv_connection_fail() {
+  async fn tcp_recv_connection_fail() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, mut rx) = mpsc::channel(32);
 
+    let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    let handle = tokio::spawn( async move { 
+      listen_tcp(&mut client_rd, tx).await;
+    });
+
+    let (mut socket, _) = listener.accept().await.unwrap();
+    socket.write(&encode_message(dummy_msg_2())[..10]).await.unwrap();
+    socket.shutdown().await.unwrap();
+    handle.await.unwrap();
   }
 
   #[test]
