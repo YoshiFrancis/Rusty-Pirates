@@ -99,8 +99,12 @@ async fn listen_tcp(rd : &mut OwnedReadHalf, tx: Sender<Message>) -> Option<Stri
 // should be async
 async fn send_tcp(wr: &mut OwnedWriteHalf, mut rx: Receiver<Message>) -> Option<String> {
   while let Some(msg) = rx.recv().await {
-    wr.write(&encode_message(msg)).await.expect("Failed to send to ship via tcp");
+    println!("received message to send on tcp");
+    let n = wr.write(&encode_message(msg)).await.expect("Failed to send to ship via tcp");
+    println!("sent {n} bytes on tcp");
+    wr.flush().await.expect("could not flush tcp");
   }
+  println!("done send_tcp");
   None
 }
 
@@ -255,7 +259,7 @@ mod tests {
   #[should_panic]
   async fn tcp_recv_connection_fail() {
     let listener = create_tcp_server().await.unwrap();
-    let (tx, mut rx) = mpsc::channel(32);
+    let (tx, mut _rx) = mpsc::channel(32);
 
     let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
     let handle = tokio::spawn( async move { 
@@ -268,9 +272,24 @@ mod tests {
     handle.await.unwrap();
   }
 
-  #[test]
-  fn tcp_basic_send() {
+  #[tokio::test]
+  async fn tcp_basic_send() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, mut rx) = mpsc::channel(32);
 
+    let (_client_rd, mut client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    let (mut socket, _) = listener.accept().await.unwrap();
+
+    tokio::spawn( async move { 
+      send_tcp(&mut client_wr, rx).await.unwrap();
+    });
+
+
+    let _ = tx.send(dummy_msg_1()).await;
+    let mut bytes_buffer: BytesMut = BytesMut::with_capacity(4096);
+    let n = socket.read_buf(&mut bytes_buffer).await.unwrap();
+    assert_eq!(n, 18);
+    assert_eq!(decode_bytes(&bytes_buffer).unwrap(), dummy_msg_1());
   }
 
   #[test] 
