@@ -31,10 +31,10 @@ impl ConnectionHandles {
   }
 
   pub async fn await_handles(self) {
-    self.listen_tcp.await;
-    self.send_tcp.await;
-    self.listen_udp.await;
-    self.send_udp.await;
+    let _ = self.listen_tcp.await;
+    let _ = self.send_tcp.await;
+    let _ = self.listen_udp.await;
+    let _ = self.send_udp.await;
   }
 }
 
@@ -86,7 +86,11 @@ async fn listen_tcp(rd : &mut OwnedReadHalf, tx: Sender<Message>) -> Option<Stri
         return Some("peer reset connection -> unfinished bytes in buffer".into());
       }
     }
+
+    println!("listen_tcp receive");
+
     while let Ok(msg) = decode_bytes(&bytes_buffer) {
+      println!("decoded message: {:?}", msg);
       tx.send(msg).await.expect("failed to send received tcp message bakc on tx");
     }
   }
@@ -123,4 +127,143 @@ async fn send_udp(udp: Arc<UdpSocket>, mut rx: Receiver<Message>) -> Result<(), 
     udp.send(&encode_message(msg)).await.expect("failed to send udp message to ship");
   }
   Ok(())
+}
+
+mod tests {
+  use super::*;
+  use rusty_protocol::rusty_protocol::{create_message, RPMessageType};
+use tokio::net::TcpListener;
+  fn dummy_msg_1() ->Message { 
+    create_message(RPMessageType::Cdirectory, vec!["test1".to_string(), "test2".to_string()]) 
+  }
+
+  fn dummy_msg_2() -> Message {
+    create_message(RPMessageType::Text, vec!["I".to_string(), "Am".to_string(), "Yoshi".to_string(), "King".to_string()])
+  }
+
+  async fn create_tcp_server() -> Result<TcpListener, Error> {
+    Ok(TcpListener::bind("127.0.0.1:6379").await.unwrap())
+  }
+
+  async fn create_tcp_client() -> Result<(OwnedReadHalf, OwnedWriteHalf), Error> {
+    println!("creating tcp client");
+    let tcp = TcpStream::connect("127.0.0.1:6379").await?;
+    println!("connected to tcp connection");
+    Ok(tcp.into_split())
+  }
+
+  // tcp tests
+  #[tokio::test]
+  async fn tcp_basic_recv() {
+    let listener = create_tcp_server().await.unwrap();
+    let (tx, mut rx) = mpsc::channel(32);
+
+    let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
+    let listen_handle = tokio::spawn( async move { 
+      listen_tcp(&mut client_rd, tx).await;
+    });
+
+    let (mut socket, _) = listener.accept().await.unwrap();
+    println!("accepted client");
+    socket.write(&encode_message(dummy_msg_1())).await.unwrap();
+    println!("sent message");
+
+    if let Some(msg) = rx.recv().await {
+      assert_eq!(msg, dummy_msg_1());
+      println!("good message!")
+    } else {
+      panic!("failed to receive message!")
+    }
+  }
+
+  #[test]
+  fn tcp_continuous_multiple_recv() {
+
+  }
+
+  #[test]
+  fn tcp_lagged_multiple_recv() {
+
+  }
+
+  #[test]
+  fn tcp_buffers_at_max_recv() {
+
+  }
+
+  #[test]
+  #[should_panic]
+  fn tcp_recv_connection_fail() {
+
+  }
+
+  #[test]
+  fn tcp_basic_send() {
+
+  }
+
+  #[test] 
+  fn tcp_continuous_multiple_send() {
+
+  }
+
+  #[test]
+  fn tcp_lagged_multiple_send() {
+
+  }
+
+  #[test]
+  #[should_panic]
+  fn tcp_send_fail_on_error() {
+
+  }
+
+
+  // udp tests
+  #[test]
+  fn udp_basic_recv() {
+
+  }
+
+  #[test]
+  fn udp_continuous_multiple_recv() {
+
+  }
+
+  #[test]
+  fn udp_lagged_multiple_recv() {
+
+  }
+
+  #[test]
+  fn udp_buffers_at_max_recv() {
+
+  }
+
+  #[test]
+  #[should_panic]
+  fn udp_recv_connection_fail() {
+
+  }
+
+  #[test]
+  fn udp_basic_send() {
+
+  }
+
+  #[test] 
+  fn udp_continuous_multiple_send() {
+
+  }
+
+  #[test]
+  fn udp_lagged_multiple_send() {
+
+  }
+
+  #[test]
+  #[should_panic]
+  fn udp_send_fail_on_error() {
+
+  }
 }
