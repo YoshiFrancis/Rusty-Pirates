@@ -111,20 +111,24 @@ async fn send_tcp(wr: &mut OwnedWriteHalf, mut rx: Receiver<Message>) -> Option<
 
 // should be async
 async fn listen_udp(udp: Arc<UdpSocket>, tx: Sender<Message>) -> Option<String> {
-  let mut bytes_buffer: BytesMut = BytesMut::with_capacity(4096);
-  
-  loop {
-    if 0 == udp.recv(&mut bytes_buffer).await.unwrap() {
-      if bytes_buffer.is_empty() {
-        return None;
-      } else {
-        return Some("peer reset connection -> unfinished bytes in buffer".into());
+  println!("listening udp");
+
+  let mut bytes_buffer = [0u8; 2048]; // or reuse outside loop if needed
+  let n = udp.recv(&mut bytes_buffer).await.expect("Failed to read udp");
+
+  println!("received udp datagram ({} bytes)", n);
+  let data = &bytes_buffer[..n];
+
+  match decode_bytes(data) {
+      Ok(msg) => {
+          tx.send(msg).await.expect("failed to send udp received message back on tx");
       }
-    }
-    while let Ok(msg) = decode_bytes(&bytes_buffer) {
-      tx.send(msg).await.expect("failed to send udp received message back on tx");
-    }
-  }
+      _ => {
+          eprintln!("failed to decode udp message: {:?}", data);
+      }
+  };
+
+  None
 }
 
 async fn send_udp(udp: Arc<UdpSocket>, mut rx: Receiver<Message>) -> Result<(), Error> {
@@ -153,6 +157,14 @@ mod tests {
   async fn create_tcp_client() -> Result<(OwnedReadHalf, OwnedWriteHalf), Error> {
     let tcp = TcpStream::connect("127.0.0.1:6379").await?;
     Ok(tcp.into_split())
+  }
+
+  async fn create_udp_server() -> Result<UdpSocket, Error> {
+    Ok(UdpSocket::bind("127.0.0.1:6380").await?)
+  }
+
+  async fn create_udp_client() -> Result<UdpSocket, Error> {
+    Ok(UdpSocket::bind("127.0.0.1:6381").await?)
   }
 
   async fn get_next_message(rx: &mut Receiver<Message>) -> Option<Message> {
@@ -370,9 +382,20 @@ mod tests {
   
 
   // udp tests
-  #[test]
-  fn udp_basic_recv() {
+  #[tokio::test]
+  async fn udp_basic_recv() {
 
+    let server = create_udp_server().await.unwrap();
+    let client = Arc::new(create_udp_client().await.unwrap());
+    let (tx, mut rx) = mpsc::channel(32);
+
+    let n = server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+    assert_eq!(n, 18);
+    tokio::spawn(async move { 
+      listen_udp(client, tx).await;
+    });
+
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
   }
 
   #[test]
