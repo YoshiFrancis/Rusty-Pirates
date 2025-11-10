@@ -396,27 +396,85 @@ mod tests {
     });
 
     assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    
   }
 
-  #[test]
-  fn udp_continuous_multiple_recv() {
+  #[tokio::test]
+  async fn udp_continuous_multiple_recv() {
+    let server = create_udp_server().await.unwrap();
+    let client = Arc::new(create_udp_client().await.unwrap());
+    let (tx, mut rx) = mpsc::channel(32);
+
+    let n = server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+    assert_eq!(n, 18);
+    tokio::spawn(async move { 
+      listen_udp(client, tx).await;
+    });
+
+    server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+    server.send_to(&encode_message(dummy_msg_2()), "127.0.0.1:6381").await.unwrap();
+    server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+    server.send_to(&encode_message(dummy_msg_2()), "127.0.0.1:6381").await.unwrap();
+
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
 
   }
 
-  #[test]
-  fn udp_lagged_multiple_recv() {
+  #[tokio::test]
+  async fn udp_lagged_multiple_recv() {
 
+    let server = create_udp_server().await.unwrap();
+    let client = Arc::new(create_udp_client().await.unwrap());
+    let (tx, mut rx) = mpsc::channel(32);
+
+    tokio::spawn(async move { 
+      listen_udp(client, tx).await;
+    });
+
+    tokio::spawn(async move {
+      let n= server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+      assert_eq!(n, 18);
+      sleep(Duration::from_millis(50)).await;
+      server.send_to(&encode_message(dummy_msg_2()), "127.0.0.1:6381").await.unwrap();
+      sleep(Duration::from_millis(60)).await;
+      server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+      sleep(Duration::from_millis(75)).await;
+      server.send_to(&encode_message(dummy_msg_2()), "127.0.0.1:6381").await.unwrap();
+    });
+    
+
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
   }
 
-  #[test]
-  fn udp_buffers_at_max_recv() {
+  #[tokio::test]
+  async fn udp_buffers_at_max_recv() {
+    let server = create_udp_server().await.unwrap();
+    let client = Arc::new(create_udp_client().await.unwrap());
+    let (tx, mut rx) = mpsc::channel(32);
 
-  }
+    tokio::spawn(async move { 
+      listen_udp(client, tx).await;
+    });
 
-  #[test]
-  #[should_panic]
-  fn udp_recv_connection_fail() {
+    tokio::spawn(async move {
+      for _ in 0..33 {
+        let n= server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+        assert_eq!(n, 18);
+      }
+    });
 
+    assert_eq!(rx.capacity(), 32);
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(rx.capacity(), 32);
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
+    assert_eq!(rx.capacity(), 31);
   }
 
   #[test]
