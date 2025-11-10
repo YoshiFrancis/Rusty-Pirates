@@ -496,19 +496,68 @@ mod tests {
     assert_eq!(decode_bytes(&bytes_buffer[..n]).unwrap(), dummy_msg_1());
   }
 
-  #[test] 
-  fn udp_continuous_multiple_send() {
+  #[tokio::test] 
+  async fn udp_continuous_multiple_send() {
+    let server = create_udp_server().await.unwrap();
+    let client = Arc::new(create_udp_client().await.unwrap());
+    client.connect("127.0.0.1:6380").await.unwrap();
+    let (udp_tx, udp_rx) = mpsc::channel(32);
 
+    tokio::spawn(async move {
+      send_udp(client, udp_rx).await.unwrap();
+    });
+
+    for i in 0..10 {
+      if i % 2 == 0 {
+        udp_tx.send(dummy_msg_1()).await.unwrap();
+      } else {
+        udp_tx.send(dummy_msg_2()).await.unwrap();
+      }
+    }
+
+    for i in 0..10 {
+      let mut bytes_buffer = [0u8; 2048];
+      let n = server.recv(&mut bytes_buffer).await.unwrap();
+      let msg = decode_bytes(&bytes_buffer[..n]).unwrap();
+      if i % 2 == 0 {
+        assert_eq!(msg, dummy_msg_1());
+      } else {
+        assert_eq!(msg, dummy_msg_2());
+      }
+    }
   }
 
-  #[test]
-  fn udp_lagged_multiple_send() {
+  #[tokio::test]
+  async fn udp_lagged_multiple_send() {
+    let server = create_udp_server().await.unwrap();
+    let client = Arc::new(create_udp_client().await.unwrap());
+    client.connect("127.0.0.1:6380").await.unwrap();
+    let (udp_tx, udp_rx) = mpsc::channel(32);
 
+    tokio::spawn(async move {
+      send_udp(client, udp_rx).await.unwrap();
+    });
+
+    for i in 0..10 {
+      if i % 2 == 0 {
+        udp_tx.send(dummy_msg_1()).await.unwrap();
+      } else {
+        udp_tx.send(dummy_msg_2()).await.unwrap();
+      }
+      sleep(Duration::from_millis(50)).await;
+    }
+
+    for i in 0..10 {
+      let mut bytes_buffer = [0u8; 2048];
+      let n = server.recv(&mut bytes_buffer).await.unwrap();
+      let msg = decode_bytes(&bytes_buffer[..n]).unwrap();
+      if i % 2 == 0 {
+        assert_eq!(msg, dummy_msg_1());
+      } else {
+        assert_eq!(msg, dummy_msg_2());
+      }
+    }
   }
 
-  #[test]
-  #[should_panic]
-  fn udp_send_fail_on_error() {
-
-  }
+  // no test for udp when server udp socket has closed -> udp does not detect this as it does not have a guarentee!
 }
