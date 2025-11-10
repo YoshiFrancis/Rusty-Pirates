@@ -121,7 +121,6 @@ async fn listen_tcp(rd : &mut OwnedReadHalf, tx: Sender<Message>) -> Option<Stri
           panic!("not possible")
         }
       }
-
     }
   }
 }
@@ -137,24 +136,52 @@ async fn send_tcp(wr: &mut OwnedWriteHalf, mut rx: Receiver<Message>) -> Option<
 
 // should be async
 async fn listen_udp(udp: Arc<UdpSocket>, tx: Sender<Message>) -> Option<String> {
-  println!("listening udp");
+  use rusty_protocol::rusty_protocol::ParseResult;
 
-  let mut bytes_buffer = [0u8; 2048];
-  let n = udp.recv(&mut bytes_buffer).await.expect("Failed to read udp");
-
-  println!("received udp datagram ({} bytes)", n);
-  let data = &bytes_buffer[..n];
-
-  match decode_bytes(data) {
-      Ok(msg) => {
-          tx.send(msg).await.expect("failed to send udp received message back on tx");
+  let mut bytes_buffer: BytesMut = BytesMut::with_capacity(4096);
+  bytes_buffer.resize(4096, 0);
+  let mut curr_pos = 0; // track the end of the bytes_buffer current read in messages
+  loop {
+    let mut bytes_read = udp.recv(&mut bytes_buffer).await.expect("Failed to read udp");
+    if 0 == bytes_read {
+      if bytes_buffer.is_empty() {
+        return None;
+      } else {
+        return Some("peer reset connection -> unfinished bytes in buffer".into());
       }
-      _ => {
-          eprintln!("failed to decode udp message: {:?}", data);
-      }
-  };
+    }
 
-  None
+    loop {
+      match rusty_protocol::rusty_protocol::check(&bytes_buffer, curr_pos) {
+        Some(ParseResult::Complete(end_idx)) => {
+          if let Ok(msg) = decode_bytes(&bytes_buffer[..end_idx]) {
+            tx.send(msg).await.expect("failed to send received tcp message bakc on tx");
+            bytes_buffer.advance(end_idx);
+            bytes_read -= end_idx;
+            curr_pos = 0;
+          }
+        },
+        Some(ParseResult::Invalid(end_idx)) => {
+          println!("Received invalid bytes stream: {:?}", &bytes_buffer[..end_idx]);
+          bytes_buffer.advance(end_idx);
+          curr_pos = 0;
+        },
+        Some(ParseResult::IncompleteEnd) => {
+          println!("incomplete end");
+          curr_pos += bytes_read;
+          break;
+        },
+        Some(ParseResult::NotEnoughBytes) => {
+          println!("not enough bytes");
+          curr_pos += bytes_read;
+          break;
+        },
+        None => {
+          panic!("not possible")
+        }
+      }
+    }
+  }
 }
 
 async fn send_udp(udp: Arc<UdpSocket>, mut rx: Receiver<Message>) -> Result<(), Error> {
@@ -300,20 +327,19 @@ mod tests {
   }
 
   #[tokio::test]
-  #[should_panic]
   async fn tcp_recv_connection_fail() {
     let listener = create_tcp_server().await.unwrap();
     let (tx, mut _rx) = mpsc::channel(32);
 
     let (mut client_rd, _client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
     let handle = tokio::spawn( async move { 
-      listen_tcp(&mut client_rd, tx).await;
+      listen_tcp(&mut client_rd, tx).await
     });
 
     let (mut socket, _) = listener.accept().await.unwrap();
     socket.write(&encode_message(dummy_msg_2())[..10]).await.unwrap();
     socket.shutdown().await.unwrap();
-    handle.await.unwrap();
+    assert_ne!(handle.await.unwrap(), None);
   }
 
   #[tokio::test]
@@ -477,18 +503,17 @@ mod tests {
       listen_udp(client, tx).await;
     });
 
-    tokio::spawn(async move {
-      for _ in 0..33 {
-        let n= server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
-        assert_eq!(n, 18);
-      }
-    });
+    for _ in 0..33 {
+      let n= server.send_to(&encode_message(dummy_msg_1()), "127.0.0.1:6381").await.unwrap();
+      assert_eq!(n, 18);
+    }
 
-    assert_eq!(rx.capacity(), 32);
+    sleep(Duration::from_millis(500)).await;
+    assert_eq!(rx.capacity(), 0);
     assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
-    assert_eq!(rx.capacity(), 32);
+    assert_eq!(rx.capacity(), 0);
     assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
-    assert_eq!(rx.capacity(), 31);
+    assert_eq!(rx.capacity(), 1);
   }
 
   #[tokio::test]
