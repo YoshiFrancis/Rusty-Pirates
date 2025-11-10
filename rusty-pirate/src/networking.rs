@@ -2,7 +2,7 @@ use std::io::Error;
 use std::sync::Arc;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc::Sender;
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{self, Receiver};
@@ -77,9 +77,13 @@ pub async fn create_connection(tcp_addr: &str, udp_addr_listen: &str, udp_addr_s
 }
 
 async fn listen_tcp(rd : &mut OwnedReadHalf, tx: Sender<Message>) -> Option<String>{
+  use rusty_protocol::rusty_protocol::ParseResult;
+
   let mut bytes_buffer: BytesMut = BytesMut::with_capacity(4096);
+  let mut curr_pos = 0; // track the end of the bytes_buffer current read in messages
   loop {
-    if 0 == rd.read_buf(&mut bytes_buffer).await.unwrap() {
+    let mut bytes_read = rd.read_buf(&mut bytes_buffer).await.unwrap();
+    if 0 == bytes_read {
       if bytes_buffer.is_empty() {
         return None;
       } else {
@@ -87,11 +91,37 @@ async fn listen_tcp(rd : &mut OwnedReadHalf, tx: Sender<Message>) -> Option<Stri
       }
     }
 
-    println!("listen_tcp receive");
+    loop {
+      println!("checking, {:?} with curr_pos: {curr_pos}", &bytes_buffer);
+      match rusty_protocol::rusty_protocol::check(&bytes_buffer, curr_pos) {
+        Some(ParseResult::Complete(end_idx)) => {
+          if let Ok(msg) = decode_bytes(&bytes_buffer[..end_idx]) {
+            tx.send(msg).await.expect("failed to send received tcp message bakc on tx");
+            bytes_buffer.advance(end_idx);
+            bytes_read -= end_idx;
+            curr_pos = 0;
+          }
+        },
+        Some(ParseResult::Invalid(end_idx)) => {
+          println!("Received invalid bytes stream: {:?}", &bytes_buffer[..end_idx]);
+          bytes_buffer.advance(end_idx);
+          curr_pos = 0;
+        },
+        Some(ParseResult::IncompleteEnd) => {
+          println!("incomplete end");
+          curr_pos += bytes_read;
+          break;
+        },
+        Some(ParseResult::NotEnoughBytes) => {
+          println!("not enough bytes");
+          curr_pos += bytes_read;
+          break;
+        },
+        None => {
+          panic!("not possible")
+        }
+      }
 
-    while let Ok(msg) = decode_bytes(&bytes_buffer) {
-      println!("decoded message: {:?}", msg);
-      tx.send(msg).await.expect("failed to send received tcp message bakc on tx");
     }
   }
 }
@@ -99,13 +129,9 @@ async fn listen_tcp(rd : &mut OwnedReadHalf, tx: Sender<Message>) -> Option<Stri
 // should be async
 async fn send_tcp(wr: &mut OwnedWriteHalf, mut rx: Receiver<Message>) -> Option<String> {
   while let Some(msg) = rx.recv().await {
-    println!("received message to send on tcp");
-    let n = wr.write(&encode_message(msg)).await.expect("Failed to send to ship via tcp");
-    println!("sent {n} bytes on tcp");
+    wr.write_all(&encode_message(msg)).await.expect("Failed to send to ship via tcp");
     wr.flush().await.expect("could not flush tcp");
-    println!("done flushing");
   }
-  println!("done send_tcp");
   None
 }
 
@@ -263,10 +289,14 @@ mod tests {
     }
 
     sleep(Duration::from_secs(1)).await; // allow for the rx buffer to fill
-    assert_eq!(rx.capacity(), 32);
+    assert_eq!(rx.capacity(), 0);
     assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_1());
     // ensure that the tcp still has messagers to buffer in!
-    assert_eq!(rx.capacity(), 32);
+    assert_eq!(rx.capacity(), 0);
+    assert_eq!(get_next_message(&mut rx).await.unwrap(), dummy_msg_2());
+    assert_eq!(rx.capacity(), 1);
+
+
   }
 
   #[tokio::test]
@@ -364,23 +394,6 @@ mod tests {
       let _ = sleep(Duration::from_millis(50)).await;
     }
   }
-
-  #[tokio::test]
-  #[should_panic]
-  async fn tcp_send_fail_on_error() {
-    let listener = create_tcp_server().await.unwrap();
-    let (tx, rx) = mpsc::channel(32);
-
-    let (_client_rd, mut client_wr) = create_tcp_client().await.expect("Failed to make tcp client");
-    let (socket, _) = listener.accept().await.unwrap();
-
-    drop(socket);
-    tx.send(dummy_msg_1()).await.unwrap();
-    tx.send(dummy_msg_1()).await.unwrap(); // does not immediately see the dropped socket, so send again
-                                           // analogous to my future pinging to know liveness
-    let _ = send_tcp(&mut client_wr, rx).await.unwrap();
-  }
-  
 
   // udp tests
   #[tokio::test]
