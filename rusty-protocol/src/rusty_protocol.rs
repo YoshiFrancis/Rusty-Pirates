@@ -28,8 +28,8 @@ pub enum ParseResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
-  rp_type: RPMessageType,
-  args: Vec<String>
+  pub rp_type: RPMessageType,
+  pub args: Vec<String>
 }
 
 #[derive(Debug)]
