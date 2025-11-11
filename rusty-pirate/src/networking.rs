@@ -1,11 +1,10 @@
 use std::io::Error;
 use std::sync::Arc;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::mpsc::Sender;
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use rusty_protocol::rusty_protocol::{Message, encode_message, decode_bytes};
 use tokio::task::JoinHandle;
